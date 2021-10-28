@@ -1,0 +1,126 @@
+using OffsetArrays
+using Plots
+using BenchmarkTools
+
+function pointsfromsize(Map_size; Num_points = 2)::Vector{Vector{Int}}
+    Points = []
+    for i in 1:Num_points
+        #make an x and y coordinate that is anywhere on the map
+        x = rand(1:Map_size[1])
+        y = rand(1:Map_size[2])
+        append!(Points, [[x, y]])
+    end
+    return Points
+end
+
+function determinepoints(Map::Matrix; Num_points::Int = 10)::Vector{Vector{Int}}
+    #function to create an array of points that determine where variation is centered on
+    Map_size = size(Map)
+    return pointsfromsize(Map_size, Num_points = Num_points)
+    #benchmark
+    #   map = zeros(2000,1000) points = 20 
+    #   median time = 2.5μs
+end
+
+function variation(;Normal = 80, Normal_mod = 1, Mild = 95, Mild_mod = 2, Extreme = 100, Extreme_mod = 5)
+    Check = rand(1:Extreme)
+    #Define a variable to take a random value that will be compared against the limits for events
+    if Check <= Normal
+        return randn() * Normal_mod
+        #return a normal distributed variable
+    elseif Check <= Mild
+        return sqrt(abs(randn())) * Mild_mod * rand([-1, 1])
+        #To ensure a mild and extreme is more extreme than normal take the sqrt as it will transform the normal distibution into a two hump one
+        #need to take abs to avoid complex numbers and then a random positive or negative to ensure some events are negative
+    else
+        return sqrt(abs(randn())) * Extreme_mod * rand([-1, 1])
+    end
+    #benchmark
+    #   median time = 29.5ns
+end
+
+
+function createnormalfilter(Point; Min_size = 500, Dropoff = 1000)
+    if isodd(Min_size)
+        error("Min_size must be even")
+    end
+    #Min_size must be even
+    Size = Int(ceil(abs(Point)) * Min_size - 1)
+    #multiply the magnitude of the event by the minimum size, subtract 1 so that the result is always odd
+    Half_size = Size ÷ 2
+    #integer divide so that there is no decimal remainder
+    Blank = OffsetArray(zeros(Size,Size), -Half_size:Half_size, -Half_size:Half_size) 
+    calculatedropoff!(Blank, Half_size, Point, Dropoff)
+    mirror!(Blank, Half_size)
+    return Blank
+    #benchmark
+        #point = 1.1
+        #median = 4.3ms
+end
+
+function calculatedropoff!(Blank, Half_size, Point, Dropoff)
+    for j in 0:Half_size 
+        # to calculate the value at all positions of the matrix start at -Half_size instead of 0
+        for i in 0:Half_size
+            @inbounds Blank[i,j] = Point * exp((1 / (Dropoff * abs(Point))) * (-i^2-j^2))
+            #using j,i instead of i,j as julia runs faster with rows being changed more than cols
+        end
+    end
+end
+
+function mirror!(Blank, Half_size)
+    for x in [-1,1], y in [-1,1]
+        for j in 0:Half_size, i in 0:Half_size
+            @inbounds Blank[i * x, j * y] = Blank[i,j]
+        end
+    end
+end
+
+
+function bounds(Map)
+    Map_lower_x = Map.offsets[1] + 1
+    Map_upper_x = size(Map)[1] + Map.offsets[1]
+    Map_lower_y = Map.offsets[2] + 1
+    Map_upper_y = size(Map)[2] + Map.offsets[2]
+    return (Map_lower_x, Map_upper_x, Map_lower_y, Map_upper_y)
+    #benchmark
+    #   bounds(zeros(2000,1000))
+    #   median = 1.9ns
+end
+
+
+function applynormalfilter!(Map, Normal_map)
+    Map_bounds = bounds(Map)
+    Normal_bounds = bounds(Normal_map)
+    addnormalfilter!(Map, Map_bounds, Normal_bounds, Normal_map)
+    #benchmark
+    #   Map = zeros(2000,1000), Rand_map = createnormalfilter(variation(), Min_size = 500, Dropoff = 1000)
+    #   median = 347μs
+end
+
+function addnormalfilter!(Map, Map_bounds, Normal_bounds, Normal_map)
+    for j in max(Map_bounds[3], Normal_bounds[3]):min(Map_bounds[4], Normal_bounds[4])
+        for i in max(Map_bounds[1], Normal_bounds[1]):min(Map_bounds[2], Normal_bounds[2])
+            Map[i,j] += Normal_map[i,j]
+        end
+    end
+end 
+
+
+function maprandoms!(Map; Num_points = 20, Min_size = 500, Dropoff = 1000)
+    Points = determinepoints(Map, Num_points = Num_points)
+    mappoints!(Map, Points, Min_size, Dropoff)
+    return Map
+    #benchmark
+    #   Map = zeros(2000,1000)
+    #   median = 110ms
+end
+
+function mappoints!(Map, Points, Min_size, Dropoff)
+    for Point in Points
+        Rand_map = createnormalfilter(variation(), Min_size = Min_size, Dropoff = Dropoff)
+        Map = OffsetArray(Map, -Point[1], -Point[2])
+        applynormalfilter!(Map, Rand_map)
+        Map = parent(Map)
+    end
+end

@@ -1,0 +1,73 @@
+include("Map_variation_mask")
+
+#Initial set up functions
+
+function factionseeds(Map::Matrix{Int}; Num_factions::Int)::Matrix{Int}
+    Points = determinepoints(Map, Num_points = Num_factions)
+    for (Faction, Position) in enumerate(Points)
+        Map[Position[1], Position[2]] = Faction
+    end
+    return Map
+end
+
+function factionseeds(Map::Matrix{Int}, Factions::Vector{Int})::Matrix{Int}
+    Points = determinepoints(Map, Num_points = length(Factions))
+    for (ind, Position) in enumerate(Points)
+        Map[Position[1], Position[2]] = Factions[ind]
+    end
+    return Map
+end
+
+
+#Helper calculation functions
+
+function cart2vector(Vec::Vector{CartesianIndex{2}})::Vector{Vector{Int64}}
+    return [[entry.I...] for entry in Vec]
+end
+
+function sqrddistance(A::Vector{Int64}, B::Vector{Int64}; With_noise::Bool = false)
+    return sum((B - A).^2) + (With_noise ? randn() : 0)
+end
+
+
+#Data manipulation functions
+
+function analyzepoints!(Map::Matrix{Int}, New_points::Vector{Vector{Int}}, Occupied_points::Vector{Vector{Int64}}, KNN::Int)::Matrix{Int}
+    for Point in New_points
+        analyzesurroundings!(Map, Point, Occupied_points, KNN)
+    end
+    return Map
+end
+
+function analyzesurroundings!(Map::Matrix{Int}, Point::Vector{Int}, Occupied_points::Vector{Vector{Int}}, KNN::Int)::Matrix{Int}
+    Dist = finddistances(Map, Point, Occupied_points)
+    Factions = hcat(sort(Dist, by = x -> x[2])[1:KNN]...)[1,:]
+    Map[Point[1], Point[2]] = mode(Factions)
+    return Map
+end
+
+function finddistances(Map::Matrix{Int}, Point::Vector{Int}, Occupied_points::Vector{Vector{Int}}; Dist = [])::Vector{Vector{Float64}}
+    for Occupied in Occupied_points
+        push!(Dist, [Map[Occupied[1], Occupied[2]], sqrddistance(Point, Occupied, With_noise = true)])
+    end
+    return Dist
+end
+
+
+#Main Calling functions
+
+#Pass a map with factions in it and this function with choose points at random and determine which faction they should be based on KNN
+#Useful within cities when all points are valid for faction control
+function randgrowth!(Map::Matrix{Int}; rate::Int = 1, KNN::Int = 1)::Matrix{Int}
+    New_points = determinepoints(Map, Num_points = rate)
+    Occupied_points = cart2vector(findall(x -> x != 0, Map))
+    analyzepoints!(Map, New_points, Occupied_points, KNN)
+end
+
+#Pass a map with faction in it and a specified point, this function will determine it's faction based on KNN
+#Useful for when a new city is added to the map and its faction needs to be determined and all points on the map are not valid
+function analyzesurroundings!(Map::Matrix{Int}, Point::Vector{Int}, KNN::Int)::Matrix{Int}
+    Occupied_points = cart2vector(findall(x -> x != 0, Map))
+    analyzesurroundings!(Map, Point, Occupied_points, KNN)
+    return Map
+end
